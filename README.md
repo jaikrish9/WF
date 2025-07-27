@@ -23,28 +23,29 @@ if [ ! -f "$CSV_FILE" ]; then
 fi
 
 # Output CSV Header
-echo "Cluster,API_Endpoint,Namespace,Runner_Name,GitHub_Config_URL,Org_Name,Runner_ID,Age,Status" > "$OUTPUT_FILE"
+# Update header to remove Org_Name extraction from config URL
+# New CSV format: cluster_name,api_endpoint,namespace,org_name
+# Runner output: Cluster,API_Endpoint,Namespace,Org_Name,Runner_Name,GitHub_Config_URL,Runner_ID,Age,Status
 
+echo "Cluster,API_Endpoint,Namespace,Org_Name,Runner_Name,GitHub_Config_URL,Runner_ID,Age,Status" > "$OUTPUT_FILE"
 
-# Get unique cluster/api combinations
-mapfile -t clusters < <(awk -F',' '!seen[$1","$2]++ { print $1 "," $2 }' "$CSV_FILE")
+# Get unique cluster/api/org combinations
+mapfile -t clusters < <(awk -F',' '!seen[$1","$2","$4]++ { print $1 "," $2 "," $4 }' "$CSV_FILE")
 
 for entry in "${clusters[@]}"; do
-    IFS=',' read -r cluster_name api_endpoint <<< "$entry"
-
+    IFS=',' read -r cluster_name api_endpoint org_name <<< "$entry"
     echo -e "\n========================="
     echo "Cluster: $cluster_name"
     echo "API:     $api_endpoint"
+    echo "Org:     $org_name"
     echo "========================="
-
     # Authenticate once per cluster
     echo "$PASSWORD" | tkgi get-kubeconfig "$cluster_name" -u "$USERNAME" -a "$api_endpoint" -k
     if [ $? -ne 0 ]; then
         echo " Authentication failed for $cluster_name. Skipping."
         continue
     fi
-
-    mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" '$1 == cl { print $3 }' "$CSV_FILE")
+    mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" -v org="$org_name" '$1 == cl && $4 == org { print $3 }' "$CSV_FILE")
 
     # Run kubectl calls in parallel
     MAX_PARALLEL=20
@@ -87,7 +88,6 @@ run_limited() {
         declare -a runner_lines
         while IFS= read -r line; do
             read -r name config_url runner_id ready total creation_ts <<< "$line"
-            org_name=$(cut -d'/' -f4 <<< "$config_url")
             created=$(date -u -d "$creation_ts" +%s 2>/dev/null)
             if [[ -n "$created" && "$created" =~ ^[0-9]+$ ]]; then
                 age_min=$(( (now - created) / 60 ))
@@ -104,10 +104,10 @@ run_limited() {
             fi
             if [[ -n "$STATUS_FILTER" ]]; then
                 if [[ "$status" == "$STATUS_FILTER" ]]; then
-                    runner_lines+=("$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status")
+                    runner_lines+=("$cluster_name,$api_endpoint,$ns,$org_name,$name,$config_url,$runner_id,$age,$status")
                 fi
             else
-                runner_lines+=("$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status")
+                runner_lines+=("$cluster_name,$api_endpoint,$ns,$org_name,$name,$config_url,$runner_id,$age,$status")
             fi
         done <<< "$output"
         # Output all runner lines at once
