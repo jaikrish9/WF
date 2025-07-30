@@ -4,7 +4,6 @@ import sys
 import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
-import getpass
 
 CSV_FILE = "cluster1_namespaces.csv"
 OUTPUT_FILE = f"ephemeral_runner_report_{datetime.now().strftime('%Y%m%d_%H%M')}.csv"
@@ -13,11 +12,12 @@ TMP_DIR = os.path.join(os.environ.get("TMP", "/tmp"), f"runner_data_{os.getpid()
 MAX_PARALLEL = 10
 
 def prompt_credentials():
-    username = input("Enter username: ").strip()
-    if not username:
-        print(" Username is required. Exiting.")
-        sys.exit(1)
-    password = getpass.getpass("Enter password: ")
+    while True:
+        username = input("Enter username: ").strip()
+        if username:
+            break
+        print(" Username is required. Please try again.")
+    password = input("Enter password: ")
     return username, password
 
 def read_clusters_and_namespaces(csv_file):
@@ -36,6 +36,8 @@ def authenticate(cluster_name, api_endpoint, username, password):
         "-u", username, "-a", api_endpoint, "-k"
     ]
     proc = subprocess.run(cmd, input=password.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if proc.returncode != 0:
+        print(proc.stderr.decode(errors="ignore"))
     return proc.returncode == 0
 
 def process_namespace(cluster_name, api_endpoint, ns, now):
@@ -77,7 +79,7 @@ def main():
     os.makedirs(TMP_DIR, exist_ok=True)
     username, password = prompt_credentials()
     clusters = read_clusters_and_namespaces(CSV_FILE)
-    now = datetime.utcnow().replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
 
 
     import argparse
