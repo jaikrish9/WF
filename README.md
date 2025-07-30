@@ -47,7 +47,7 @@ for entry in "${clusters[@]}"; do
 
     mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" '$1 == cl { print $3 }' "$CSV_FILE")
 
-    # Function to process a namespace
+    # Function to process a namespace and write directly to the output file using flock
     process_namespace() {
         ns="$1"
         output=$(kubectl get ephemeralrunner -n "$ns" -o custom-columns=NAME:.metadata.name,CONFIG_URL:.spec.githubConfigUrl,RUNNERID:.status.runnerId,READY:.status.readyReplicas,TOTAL:.status.replicas,AGE:.metadata.creationTimestamp --no-headers 2>/dev/null)
@@ -72,15 +72,19 @@ for entry in "${clusters[@]}"; do
             else
                 status="Pending"
             fi
-            echo "$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status"
+            # Write directly to the output file using flock for safe parallel writes
+            {
+                flock 200
+                echo "$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status" >> "$OUTPUT_FILE"
+            } 200>"$OUTPUT_FILE.lock"
         done <<< "$output"
     }
 
     export -f process_namespace
-    export cluster_name api_endpoint
+    export cluster_name api_endpoint OUTPUT_FILE
 
     # Run kubectl calls in parallel using xargs
-    printf "%s\n" "${namespaces[@]}" | xargs -n1 -P10 bash -c 'process_namespace "$@"' _ >> "$OUTPUT_FILE"
+    printf "%s\n" "${namespaces[@]}" | xargs -n1 -P10 bash -c 'process_namespace "$@"' _
     cp "$OUTPUT_FILE" "$TEMP_OUTPUT"
 done
 
