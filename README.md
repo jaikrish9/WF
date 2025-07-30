@@ -27,10 +27,24 @@ echo "Cluster,API_Endpoint,Namespace,Runner_Name,GitHub_Config_URL,Org_Name,Runn
 
 
 # Get unique cluster/api combinations
-mapfile -t clusters < <(awk -F',' '!seen[$1","$2]++ { print $1 "," $2 }' "$CSV_FILE")
 
-for entry in "${clusters[@]}"; do
-    IFS=',' read -r cluster_name api_endpoint <<< "$entry"
+# --- Improved CSV Parsing: Build associative arrays for clusters and namespaces ---
+declare -A cluster_namespaces
+declare -A cluster_api
+
+while IFS=',' read -r cluster api ns _; do
+    key="${cluster},${api}"
+    cluster_api["$key"]="$api"
+    if [[ -z "${cluster_namespaces[$key]}" ]]; then
+        cluster_namespaces["$key"]="$ns"
+    else
+        cluster_namespaces["$key"]+="|${ns}"
+    fi
+done < "$CSV_FILE"
+
+for key in "${!cluster_namespaces[@]}"; do
+    cluster_name="${key%%,*}"
+    api_endpoint="${key#*,}"
 
     echo -e "\n========================="
     echo "Cluster: $cluster_name"
@@ -44,10 +58,9 @@ for entry in "${clusters[@]}"; do
         continue
     fi
 
+    IFS='|' read -r -a namespaces <<< "${cluster_namespaces[$key]}"
 
-    mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" '$1 == cl { print $3 }' "$CSV_FILE")
-
-    # Function to process a namespace and write directly to the output file using flock
+    # Function to process a namespace
     process_namespace() {
         ns="$1"
         output=$(kubectl get ephemeralrunner -n "$ns" -o custom-columns=NAME:.metadata.name,CONFIG_URL:.spec.githubConfigUrl,RUNNERID:.status.runnerId,READY:.status.readyReplicas,TOTAL:.status.replicas,AGE:.metadata.creationTimestamp --no-headers 2>/dev/null)
@@ -72,19 +85,15 @@ for entry in "${clusters[@]}"; do
             else
                 status="Pending"
             fi
-            # Write directly to the output file using flock for safe parallel writes
-            {
-                flock 200
-                echo "$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status" >> "$OUTPUT_FILE"
-            } 200>"$OUTPUT_FILE.lock"
+            echo "$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status"
         done <<< "$output"
     }
 
     export -f process_namespace
-    export cluster_name api_endpoint OUTPUT_FILE
+    export cluster_name api_endpoint
 
     # Run kubectl calls in parallel using xargs
-    printf "%s\n" "${namespaces[@]}" | xargs -n1 -P10 bash -c 'process_namespace "$@"' _
+    printf "%s\n" "${namespaces[@]}" | xargs -n1 -P10 bash -c 'process_namespace "$@"' _ >> "$OUTPUT_FILE"
     cp "$OUTPUT_FILE" "$TEMP_OUTPUT"
 done
 
