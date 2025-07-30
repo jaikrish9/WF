@@ -23,23 +23,20 @@ if [ ! -f "$CSV_FILE" ]; then
 fi
 
 # Output CSV Header
-# Update header to remove Org_Name extraction from config URL
-# New CSV format: cluster_name,api_endpoint,namespace,org_name
-# Runner output: Cluster,API_Endpoint,Namespace,Org_Name,Runner_Name,GitHub_Config_URL,Runner_ID,Age,Status
+echo "Cluster,API_Endpoint,Namespace,Runner_Name,GitHub_Config_URL,Org_Name,Runner_ID,Age,Status" > "$OUTPUT_FILE"
 
-echo "Cluster,API_Endpoint,Namespace,Org_Name,Runner_Name,GitHub_Config_URL,Runner_ID,Age,Status" > "$OUTPUT_FILE"
 
-# Get unique cluster/api/org combinations
-mapfile -t clusters < <(awk -F',' '!seen[$1","$2","$4]++ { print $1 "," $2 "," $4 }' "$CSV_FILE")
+# Get unique cluster/api combinations
+mapfile -t clusters < <(awk -F',' '!seen[$1","$2]++ { print $1 "," $2 }' "$CSV_FILE")
 
 for entry in "${clusters[@]}"; do
+    IFS=',' read -r cluster_name api_endpoint <<< "$entry"
 
-    IFS=',' read -r cluster_name api_endpoint org_name <<< "$entry"
     echo -e "\n========================="
     echo "Cluster: $cluster_name"
     echo "API:     $api_endpoint"
-    echo "Org:     $org_name"
     echo "========================="
+
     # Authenticate once per cluster
     echo "$PASSWORD" | tkgi get-kubeconfig "$cluster_name" -u "$USERNAME" -a "$api_endpoint" -k
     if [ $? -ne 0 ]; then
@@ -47,80 +44,48 @@ for entry in "${clusters[@]}"; do
         continue
     fi
 
-    # For each namespace in this cluster/org, get all matching rows from CSV (to get correct org_name per namespace)
-    mapfile -t ns_rows < <(awk -F',' -v cl="$cluster_name" -v api="$api_endpoint" -v org="$org_name" '$1 == cl && $2 == api && $4 == org { print $0 }' "$CSV_FILE")
 
-    MAX_PARALLEL=20
-    TMP_DIR="/tmp/ephemeral_runner_data"
-    mkdir -p "$TMP_DIR"
-    now=$(date -u +%s)
-    parallel_jobs=0
-    run_limited() {
-        # $1 is the full CSV row: cluster_name,api_endpoint,namespace,org_name
-        IFS=',' read -r cl_name api_ep ns org_nm <<< "$1"
-        while [ "$parallel_jobs" -ge "$MAX_PARALLEL" ]; do
-            wait -n
-            ((parallel_jobs--))
-        done
-        {
-            STATUS_FILTER=""
-            case "$OPTION" in
-                -running)
-                    STATUS_FILTER="Running"
-                    ;;
-                -pending|-DeletePending)
-                    STATUS_FILTER="Pending"
-                    ;;
-                -failed|-DeleteFailed)
-                    STATUS_FILTER="Failed"
-                    ;;
-            esac
-            output=$(kubectl get ephemeralrunner -n "$ns" -o custom-columns=NAME:.metadata.name,CONFIG_URL:.spec.githubConfigUrl,RUNNERID:.status.runnerId,READY:.status.readyReplicas,TOTAL:.status.replicas,AGE:.metadata.creationTimestamp --no-headers 2>/dev/null)
-            if [ -z "$output" ]; then
-                exit 0
+    mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" '$1 == cl { print $3 }' "$CSV_FILE")
+
+    # Function to process a namespace
+    process_namespace() {
+        ns="$1"
+        output=$(kubectl get ephemeralrunner -n "$ns" -o custom-columns=NAME:.metadata.name,CONFIG_URL:.spec.githubConfigUrl,RUNNERID:.status.runnerId,READY:.status.readyReplicas,TOTAL:.status.replicas,AGE:.metadata.creationTimestamp --no-headers 2>/dev/null)
+        if [ -z "$output" ]; then
+            return
+        fi
+        now=$(date -u +%s)
+        while IFS= read -r line; do
+            read -r name config_url runner_id ready total creation_ts <<< "$line"
+            org_name=$(cut -d'/' -f4 <<< "$config_url")
+            created=$(date -u -d "$creation_ts" +%s 2>/dev/null)
+            if [[ -n "$created" && "$created" =~ ^[0-9]+$ ]]; then
+                age_min=$(( (now - created) / 60 ))
+                age="${age_min}m"
+            else
+                age="N/A"
             fi
-            declare -a runner_lines
-            while IFS= read -r line; do
-                read -r name config_url runner_id ready total creation_ts <<< "$line"
-                created=$(date -u -d "$creation_ts" +%s 2>/dev/null)
-                if [[ -n "$created" && "$created" =~ ^[0-9]+$ ]]; then
-                    age_min=$(( (now - created) / 60 ))
-                    age="${age_min}m"
-                else
-                    age="N/A"
-                fi
-                if [[ "$ready" == "$total" && "$ready" != "" && "$total" != "" && "$ready" != "0" ]]; then
-                    status="Running"
-                elif [[ "$ready" == "0" ]]; then
-                    status="Failed"
-                else
-                    status="Pending"
-                fi
-                if [[ -n "$STATUS_FILTER" ]]; then
-                    if [[ "$status" == "$STATUS_FILTER" ]]; then
-                        runner_lines+=("$cl_name,$api_ep,$ns,$org_nm,$name,$config_url,$runner_id,$age,$status")
-                    fi
-                else
-                    runner_lines+=("$cl_name,$api_ep,$ns,$org_nm,$name,$config_url,$runner_id,$age,$status")
-                fi
-            done <<< "$output"
-            for rline in "${runner_lines[@]}"; do
-                echo "$rline"
-            done
-        } > "$TMP_DIR/$cl_name-$ns.csv" &
-        ((parallel_jobs++))
+            if [[ "$ready" == "$total" && "$ready" != "" && "$total" != "" && "$ready" != "0" ]]; then
+                status="Running"
+            elif [[ "$ready" == "0" ]]; then
+                status="Failed"
+            else
+                status="Pending"
+            fi
+            echo "$cluster_name,$api_endpoint,$ns,$name,$config_url,$org_name,$runner_id,$age,$status"
+        done <<< "$output"
     }
-    # Main loop: run each namespace row with controlled parallelism
-    for ns_row in "${ns_rows[@]}"; do
-        run_limited "$ns_row"
-    done
-    wait
+
+    export -f process_namespace
+    export cluster_name api_endpoint
+
+    # Run kubectl calls in parallel using xargs
+    printf "%s\n" "${namespaces[@]}" | xargs -n1 -P10 bash -c 'process_namespace "$@"' _ >> "$OUTPUT_FILE"
+    cp "$OUTPUT_FILE" "$TEMP_OUTPUT"
 done
 
-# Merge all per-namespace CSVs
-cat "$TMP_DIR"/*.csv >> "$OUTPUT_FILE"
-cp "$OUTPUT_FILE" "$TEMP_OUTPUT"
-rm -rf "$TMP_DIR"
+echo -e "\n Data collection complete. Output saved to: $OUTPUT_FILE"
+echo
 
 echo -e "\n Data collection complete. Output saved to: $OUTPUT_FILE"
 echo
@@ -157,23 +122,14 @@ for arg in "$@"; do
         -h|--help)
             echo "Usage: $0 [option] [--org <ORG>] [-AllOrgs]"
             echo "Options:"
-            echo "  -summary             Show summary of all runners by org"
-            echo "  -running             Show running runners grouped by org"
-            echo "  -pending             Show pending runners grouped by org"
-            echo "  -failed              Show failed runners grouped by org"
-            echo "  -DeletePending       Delete pending runners (interactive, based on CSV)"
-            echo "  -DeleteFailed        Delete failed runners (interactive, based on CSV)"
-            echo "  -DeletePendingFast   Real-time, interactive deletion of pending runners (no CSV, acts on current status)"
-            echo "  -DeleteFailedFast    Real-time, interactive deletion of failed runners (no CSV, acts on current status)"
-            echo "  --org <ORG>          Filter by organization"
-            echo "  -AllOrgs             Include all organizations (default behavior)"
-            echo "  -h, --help           Show this help message"
-            echo ""
-            echo "Examples:"
-            echo "  $0 -summary"
-            echo "  $0 -pending --org myorg"
-            echo "  $0 -DeletePending"
-            echo "  $0 -DeletePendingFast"
+            echo "  -summary         Show summary of all runners by org"
+            echo "  -running         Show running runners grouped by org"
+            echo "  -pending         Show pending runners grouped by org"
+            echo "  -failed          Show failed runners grouped by org"
+            echo "  -DeletePending   Delete pending runners (interactive)"
+            echo "  -DeleteFailed    Delete failed runners (interactive)"
+            echo "  --org <ORG>      Filter by organization"
+            echo "  -AllOrgs         Include all organizations (default behavior)"
             exit 0
             ;;
     esac
@@ -312,44 +268,6 @@ case "$OPTION" in
     else
         echo " Skipping deletion. No runners were deleted."
     fi
-    ;;
-
-  -DeletePendingFast|-DeleteFailedFast)
-    # Add real-time delete options for immediate, interactive deletion
-    STATUS_FILTER=""
-    if [[ "$OPTION" == "-DeletePendingFast" ]]; then
-        STATUS_FILTER="Pending"
-    elif [[ "$OPTION" == "-DeleteFailedFast" ]]; then
-        STATUS_FILTER="Failed"
-    fi
-    for entry in "${clusters[@]}"; do
-        IFS=',' read -r cluster_name api_endpoint <<< "$entry"
-        echo "$PASSWORD" | tkgi get-kubeconfig "$cluster_name" -u "$USERNAME" -a "$api_endpoint" -k
-        mapfile -t namespaces < <(awk -F',' -v cl="$cluster_name" '$1 == cl { print $3 }' "$CSV_FILE")
-        for ns in "${namespaces[@]}"; do
-            output=$(kubectl get ephemeralrunner -n "$ns" -o custom-columns=NAME:.metadata.name,READY:.status.readyReplicas,TOTAL:.status.replicas --no-headers 2>/dev/null)
-            if [ -z "$output" ]; then
-                continue
-            fi
-            while IFS= read -r line; do
-                read -r name ready total <<< "$line"
-                if [[ "$STATUS_FILTER" == "Pending" && "$ready" == "0" ]]; then
-                    echo "Pending runner: $name in namespace: $ns (Cluster: $cluster_name)"
-                    read -rp "Delete this runner? (Y/N): " confirm
-                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                        kubectl -n "$ns" delete pod "$name"
-                    fi
-                elif [[ "$STATUS_FILTER" == "Failed" && "$ready" == "0" ]]; then
-                    echo "Failed runner: $name in namespace: $ns (Cluster: $cluster_name)"
-                    read -rp "Delete this runner? (Y/N): " confirm
-                    if [[ "$confirm" =~ ^[Yy]$ ]]; then
-                        kubectl -n "$ns" delete pod "$name"
-                    fi
-                fi
-            done <<< "$output"
-        done
-    done
-    exit 0
     ;;
 
   *)
