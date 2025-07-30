@@ -35,9 +35,10 @@ def authenticate(cluster_name, api_endpoint, username, password):
         "tkgi", "get-kubeconfig", cluster_name,
         "-u", username, "-a", api_endpoint, "-k"
     ]
-    proc = subprocess.run(cmd, input=password.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Run interactively so password prompt and output are visible
+    proc = subprocess.run(cmd)
     if proc.returncode != 0:
-        print(proc.stderr.decode(errors="ignore"))
+        print(f"Authentication failed for {cluster_name}.")
     return proc.returncode == 0
 
 def process_namespace(cluster_name, api_endpoint, ns, now):
@@ -84,7 +85,7 @@ def main():
 
     import argparse
     parser = argparse.ArgumentParser(description="Ephemeral Runner Report Tool")
-    parser.add_argument("option", nargs="?", choices=["-summary", "-running", "-pending", "-failed", "-DeletePending", "-DeleteFailed"], help="Reporting option")
+    parser.add_argument("option", nargs="?", choices=["summary", "-summary", "running", "-running", "pending", "-pending", "failed", "-failed", "DeletePending", "-DeletePending", "DeleteFailed", "-DeleteFailed"], help="Reporting option")
     parser.add_argument("--org", dest="org_filter", default=None, help="Filter by organization")
     parser.add_argument("-AllOrgs", dest="all_orgs", action="store_true", help="Include all organizations")
     args = parser.parse_args()
@@ -135,7 +136,7 @@ def main():
         print(f"{'Runner Name':<40} {'Org Name':<40} {'Age':<20} {'Count':>10}")
         print("------------------------------------------------------------------------------------------")
 
-    if args.option == "-summary":
+    if args.option in ["summary", "-summary"]:
         print()
         header_fmt = "{:<35} {:>10} {:>10} {:>10} {:>10}"
         row_fmt = "{:<35} {:>10} {:>10} {:>10} {:>10}"
@@ -157,8 +158,8 @@ def main():
         print("-------------------------------------------------------------------------------")
         print(row_fmt.format("Total", grand["running"], grand["failed"], grand["pending"], grand["total"]))
 
-    elif args.option in ["-running", "-pending", "-failed"]:
-        status_lc = args.option[1:].lower()
+    elif args.option in ["running", "-running", "pending", "-pending", "failed", "-failed"]:
+        status_lc = args.option.replace("-", "").lower()
         org_filter = args.org_filter.lower() if args.org_filter else ""
         all_orgs = args.all_orgs
         print_table()
@@ -181,8 +182,8 @@ def main():
         print("------------------------------------------------------------------------------------------")
         print(f"{'Grand Total':<100} {grand_total:>8}")
 
-    elif args.option in ["-DeletePending", "-DeleteFailed"]:
-        status = args.option.replace("-Delete", "").lower()
+    elif args.option in ["DeletePending", "-DeletePending", "DeleteFailed", "-DeleteFailed"]:
+        status = args.option.replace("-Delete", "").replace("Delete", "").lower()
         org_filter = args.org_filter.lower() if args.org_filter else ""
         all_orgs = args.all_orgs
         print_table()
