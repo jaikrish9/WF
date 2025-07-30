@@ -34,6 +34,19 @@ mapfile -t clusters < <(awk -F',' '!seen[$1","$2","$4]++ { print $1 "," $2 "," $
 
 for entry in "${clusters[@]}"; do
 
+    IFS=',' read -r cluster_name api_endpoint org_name <<< "$entry"
+    echo -e "\n========================="
+    echo "Cluster: $cluster_name"
+    echo "API:     $api_endpoint"
+    echo "Org:     $org_name"
+    echo "========================="
+    # Authenticate once per cluster
+    echo "$PASSWORD" | tkgi get-kubeconfig "$cluster_name" -u "$USERNAME" -a "$api_endpoint" -k
+    if [ $? -ne 0 ]; then
+        echo " Authentication failed for $cluster_name. Skipping."
+        continue
+    fi
+
     # For each namespace in this cluster/org, get all matching rows from CSV (to get correct org_name per namespace)
     mapfile -t ns_rows < <(awk -F',' -v cl="$cluster_name" -v api="$api_endpoint" -v org="$org_name" '$1 == cl && $2 == api && $4 == org { print $0 }' "$CSV_FILE")
 
