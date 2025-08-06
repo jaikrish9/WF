@@ -132,9 +132,7 @@ def main():
             print(f"Cluster: {cluster_name}")
             print(f"API:     {api_endpoint}")
             print(f"=========================")
-            if not authenticate(cluster_name, api_endpoint, username, password):
-                print(f" Authentication failed for {cluster_name}. Skipping.")
-                continue
+            # Authentication already done in data collection phase; do not repeat here
             ns_checked = 0
             total_runners = 0
             running_count = 0
@@ -153,14 +151,12 @@ def main():
                         runner_lines = lines[1:]
                         count = len(runner_lines)
                         total_runners += count
-                        # Try to count running (Ready=1 or READY column)
                         for line in runner_lines:
                             cols = line.split()
-                            # Try to find READY or READY_REPLICAS column (4th col by default)
-                            ready = None
-                            if len(cols) >= 4:
-                                ready = cols[3]
-                            if ready == "1":
+                            ready = cols[3] if len(cols) >= 4 else None
+                            # If there is a STATUS column, use it (last col), else infer from READY
+                            status = cols[-1].lower() if len(cols) >= 6 else None
+                            if (ready == "1" and (status is None or status == "running")):
                                 running_count += 1
                             else:
                                 not_running_count += 1
