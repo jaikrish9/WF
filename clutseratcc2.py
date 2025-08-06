@@ -35,8 +35,8 @@ def authenticate(cluster_name, api_endpoint, username, password):
         "tkgi", "get-kubeconfig", cluster_name,
         "-u", username, "-a", api_endpoint, "-k"
     ]
-    # Run interactively so password prompt and output are visible
-    proc = subprocess.run(cmd)
+    # Pass password via stdin so it is not prompted again
+    proc = subprocess.run(cmd, input=password + "\n", text=True)
     if proc.returncode != 0:
         print(f"Authentication failed for {cluster_name}.")
     return proc.returncode == 0
