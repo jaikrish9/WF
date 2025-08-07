@@ -127,41 +127,32 @@ def main():
         print("  -AllOrgs         Include all organizations (default behavior)")
         sys.exit(0)
     if args.option in ["details", "-details"]:
-        for (cluster_name, api_endpoint), namespaces in clusters.items():
+        # Print detailed runner info from CSV file, grouped by cluster and namespace
+        from collections import defaultdict
+        details = defaultdict(lambda: defaultdict(list))  # cluster -> ns -> list of rows
+        for row in rows:
+            details[(row["Cluster"], row["API_Endpoint"])][row["Namespace"]].append(row)
+        for (cluster_name, api_endpoint), ns_map in details.items():
             print(f"\n=========================")
             print(f"Cluster: {cluster_name}")
             print(f"API:     {api_endpoint}")
             print(f"=========================")
-            # Authentication already done in data collection phase; do not repeat here
             ns_checked = 0
             total_runners = 0
             running_count = 0
             not_running_count = 0
-            for ns in namespaces:
+            for ns, runner_rows in ns_map.items():
                 print(f"\nNamespace: {ns}")
-                print(f"kubectl get ephemeralrunner -n {ns}")
-                try:
-                    output = subprocess.check_output([
-                        "kubectl", "get", "ephemeralrunner", "-n", ns
-                    ], stderr=subprocess.STDOUT, text=True)
-                    print(output)
-                    ns_checked += 1
-                    lines = output.strip().splitlines()
-                    if lines and lines[0].strip().startswith("NAME"):
-                        runner_lines = lines[1:]
-                        count = len(runner_lines)
-                        total_runners += count
-                        for line in runner_lines:
-                            cols = line.split()
-                            ready = cols[3] if len(cols) >= 4 else None
-                            # If there is a STATUS column, use it (last col), else infer from READY
-                            status = cols[-1].lower() if len(cols) >= 6 else None
-                            if (ready == "1" and (status is None or status == "running")):
-                                running_count += 1
-                            else:
-                                not_running_count += 1
-                except subprocess.CalledProcessError as e:
-                    print(f"Error: {e.output.strip()}")
+                print(f"{'Runner_Name':<30} {'GitHub_Config_URL':<40} {'Org_Name':<20} {'Runner_ID':<10} {'Age':<8} {'Status':<10}")
+                print("-"*120)
+                for row in runner_rows:
+                    print(f"{row['Runner_Name']:<30} {row['GitHub_Config_URL']:<40} {row['Org_Name']:<20} {row['Runner_ID']:<10} {row['Age']:<8} {row['Status']:<10}")
+                    total_runners += 1
+                    if row['Status'].lower() == 'running':
+                        running_count += 1
+                    else:
+                        not_running_count += 1
+                ns_checked += 1
             print(f"\n----- Cluster Summary -----")
             print(f"Namespaces checked: {ns_checked}")
             print(f"Total runners: {total_runners}")
