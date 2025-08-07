@@ -126,6 +126,11 @@ def main():
         print("  --org <ORG>      Filter by organization")
         print("  -AllOrgs         Include all organizations (default behavior)")
         sys.exit(0)
+    # Read CSV for reporting (move this up so 'rows' is always defined before any reporting logic)
+    with open(TEMP_OUTPUT, newline='') as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+
     if args.option in ["details", "-details"]:
         # Print detailed runner info from CSV file, grouped by cluster and namespace
         from collections import defaultdict
