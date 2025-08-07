@@ -159,7 +159,8 @@ def main():
                         not_running_count += 1
                 ns_checked += 1
             print(f"\n----- Cluster Summary -----")
-            print(f"Namespaces checked: {ns_checked}")
+            print(f"Total Namespaces checked: {len(ns_map)}")
+            print(f"Namespaces with runners: {ns_checked}")
             print(f"Total runners: {total_runners}")
             print(f"Count of runners in running state: {running_count}")
             print(f"Count of runners in not running state: {not_running_count}")
@@ -266,3 +267,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
