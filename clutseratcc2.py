@@ -146,20 +146,26 @@ def main():
             total_runners = 0
             running_count = 0
             not_running_count = 0
-            for ns, runner_rows in ns_map.items():
+            # Get all namespaces for this cluster from clusters dict
+            all_namespaces = sorted(clusters.get((cluster_name, api_endpoint), []))
+            for ns in all_namespaces:
+                runner_rows = ns_map.get(ns, [])
                 print(f"\nNamespace: {ns}")
-                print(f"{'Runner_Name':<30} {'GitHub_Config_URL':<40} {'Org_Name':<20} {'Runner_ID':<10} {'Age':<8} {'Status':<10}")
-                print("-"*120)
-                for row in runner_rows:
-                    print(f"{row['Runner_Name']:<30} {row['GitHub_Config_URL']:<40} {row['Org_Name']:<20} {row['Runner_ID']:<10} {row['Age']:<8} {row['Status']:<10}")
-                    total_runners += 1
-                    if row['Status'].lower() == 'running':
-                        running_count += 1
-                    else:
-                        not_running_count += 1
-                ns_checked += 1
+                if runner_rows:
+                    print(f"{'Runner_Name':<30} {'GitHub_Config_URL':<40} {'Org_Name':<20} {'Runner_ID':<10} {'Age':<8} {'Status':<10}")
+                    print("-"*120)
+                    for row in runner_rows:
+                        print(f"{row['Runner_Name']:<30} {row['GitHub_Config_URL']:<40} {row['Org_Name']:<20} {row['Runner_ID']:<10} {row['Age']:<8} {row['Status']:<10}")
+                        total_runners += 1
+                        if row['Status'].lower() == 'running':
+                            running_count += 1
+                        else:
+                            not_running_count += 1
+                    ns_checked += 1
+                else:
+                    print("No runners found in this namespace.")
             print(f"\n----- Cluster Summary -----")
-            print(f"Total Namespaces checked: {len(ns_map)}")
+            print(f"Total Namespaces in cluster: {len(all_namespaces)}")
             print(f"Namespaces with runners: {ns_checked}")
             print(f"Total runners: {total_runners}")
             print(f"Count of runners in running state: {running_count}")
@@ -267,4 +273,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
